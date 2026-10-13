@@ -8,18 +8,24 @@ rust-version = "1.88"
 slint-build = "=1.16.1"
 
 [dependencies]
+aes = "0.8"
 anyhow = "1"
 async-trait = "0.1"
+cbc = "0.1"
 csv = "1"
 dirs = "6"
+hmac = "0.12"
 libc = "0.2"
 mysql_async = "0.37"
 native-tls = "0.2"
+pbkdf2 = "0.12"
 postgres-native-tls = "0.5"
 redis = { version = "1", features = ["tokio-comp", "tokio-native-tls-comp"] }
 rusqlite = { version = "0.40", features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
+sha1 = "0.10"
+sha2 = "0.10"
 slint = { version = "=1.16.1", default-features = false, features = ["std", "backend-winit", "renderer-femtovg", "renderer-software", "accessibility", "compat-1-2"] }
 rfd = { version = "0.17", default-features = false, features = ["xdg-portal"] }
 tempfile = "3"

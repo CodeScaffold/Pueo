@@ -26,7 +26,12 @@ pub struct Grid {
     pub rows: Vec<GridRow>,
     pub keys: Option<Vec<String>>,
     pub choices: Choices,
+    /// The focused cell (row, column).
     pub selected: Option<(usize, usize)>,
+    /// Rows picked with Cmd/Ctrl- or Shift-click, in addition to the focused one.
+    pub marked: std::collections::BTreeSet<usize>,
+    /// Where a Shift-click range starts.
+    pub anchor: Option<usize>,
 }
 impl Grid {
     pub fn from_result(result: &QueryResult) -> Self {
@@ -62,6 +67,81 @@ impl Grid {
             *cell = value;
         }
     }
+    /// Focus a cell. `mode` 0 selects only its row, 1 toggles the row (Cmd/Ctrl-click),
+    /// 2 extends from the anchor (Shift-click), 3 keeps the selection.
+    pub fn select(&mut self, row: usize, col: usize, mode: i32) {
+        if row >= self.rows.len() {
+            return;
+        }
+        match mode {
+            1 => {
+                if self.marked.is_empty()
+                    && let Some((r, _)) = self.selected
+                {
+                    self.marked.insert(r);
+                }
+                if !self.marked.remove(&row) {
+                    self.marked.insert(row);
+                }
+                self.anchor = Some(row);
+            }
+            // Right-click inside the current selection: keep it, just move the focus.
+            3 => {}
+            2 => {
+                let anchor = self.anchor.or(self.selected.map(|(r, _)| r)).unwrap_or(row);
+                self.marked = (anchor.min(row)..=anchor.max(row)).collect();
+            }
+            _ => {
+                self.marked = [row].into();
+                self.anchor = Some(row);
+            }
+        }
+        self.selected = Some((row, col));
+    }
+    /// Rows the row actions apply to, in order.
+    pub fn selected_rows(&self) -> Vec<usize> {
+        if self.marked.is_empty() {
+            self.selected.map(|(r, _)| vec![r]).unwrap_or_default()
+        } else {
+            self.marked.iter().copied().filter(|r| *r < self.rows.len()).collect()
+        }
+    }
+    pub fn duplicate_selected(&mut self) {
+        for row in self.selected_rows() {
+            self.add(Some(row));
+        }
+    }
+    /// Add rows from tab-separated text (one row per line, `NULL` for null). Key columns stay
+    /// empty so the database assigns them. Returns how many rows were added.
+    pub fn paste_rows(&mut self, text: &str) -> usize {
+        if !self.editable() {
+            return 0;
+        }
+        let mut added = 0;
+        for line in text.lines().filter(|l| !l.trim().is_empty()) {
+            let fields: Vec<&str> = line.split('\t').collect();
+            let mut current: Vec<Cell> = (0..self.columns.len())
+                .map(|i| match fields.get(i) {
+                    Some(&"NULL") | None => None,
+                    Some(v) => Some(v.to_string()),
+                })
+                .collect();
+            for (i, name) in self.columns.iter().enumerate() {
+                if self.keys.as_ref().is_some_and(|keys| keys.contains(name)) {
+                    current[i] = None;
+                }
+            }
+            self.rows.push(GridRow { original: None, current, deleted: false });
+            added += 1;
+        }
+        if added > 0 {
+            let first = self.rows.len() - added;
+            self.marked = (first..self.rows.len()).collect();
+            self.selected = Some((first, 0));
+            self.anchor = Some(first);
+        }
+        added
+    }
     pub fn add(&mut self, duplicate: Option<usize>) {
         if !self.editable() {
             return;
@@ -80,20 +160,29 @@ impl Grid {
             deleted: false,
         });
         self.selected = Some((self.rows.len() - 1, 0));
+        self.marked = [self.rows.len() - 1].into();
+        self.anchor = Some(self.rows.len() - 1);
     }
+    /// Mark the selected rows for deletion (or unmark them when all are marked already).
+    /// Rows that were only added here are dropped right away.
     pub fn delete_selected(&mut self) {
         if !self.editable() {
             return;
         }
-        if let Some((i, _)) = self.selected
-            && let Some(row) = self.rows.get_mut(i)
-        {
+        let rows = self.selected_rows();
+        let restore = rows.iter().all(|&i| self.rows.get(i).is_some_and(|r| r.deleted || r.original.is_none()))
+            && rows.iter().any(|&i| self.rows[i].deleted);
+        for &i in rows.iter().rev() {
+            let Some(row) = self.rows.get_mut(i) else { continue };
             if row.original.is_none() {
                 self.rows.remove(i);
-                self.selected = None;
             } else {
-                row.deleted = !row.deleted;
+                row.deleted = !restore;
             }
+        }
+        if rows.iter().any(|&i| i >= self.rows.len()) || self.selected.is_some_and(|(r, _)| r >= self.rows.len()) {
+            self.selected = None;
+            self.marked.clear();
         }
     }
     pub fn discard(&mut self) {
@@ -103,6 +192,8 @@ impl Grid {
             r.deleted = false;
         }
         self.selected = None;
+        self.marked.clear();
+        self.anchor = None;
     }
     pub fn changes(&self) -> anyhow::Result<Vec<RowChange>> {
         anyhow::ensure!(
@@ -240,6 +331,8 @@ pub struct Workspace {
     pub tabs: Vec<Tab>,
     pub active_tab: Option<u64>,
     pub busy: bool,
+    /// PostgreSQL schema shown in the sidebar ("" = the default, "*" = all schemas).
+    pub schema_filter: String,
     // Secrets remain only in memory when the user opts out of keyring storage.
     pub password: Option<String>,
     pub ssh_secret: Option<String>,
@@ -381,5 +474,46 @@ mod tests {
             1,
             "delete frees the unique value before update"
         );
+    }
+}
+
+#[cfg(test)]
+mod selection_tests {
+    use super::*;
+
+    fn grid() -> Grid {
+        let mut g = Grid::from_result(&QueryResult {
+            columns: vec!["id".into(), "name".into()],
+            rows: (0..5).map(|i| vec![Some(i.to_string()), Some(format!("n{i}"))]).collect(),
+            ..Default::default()
+        });
+        g.keys = Some(vec!["id".into()]);
+        g
+    }
+
+    #[test]
+    fn selects_ranges_and_toggles() {
+        let mut g = grid();
+        g.select(1, 0, 0);
+        g.select(3, 1, 2);
+        assert_eq!(g.selected_rows(), vec![1, 2, 3]);
+        g.select(2, 0, 1);
+        assert_eq!(g.selected_rows(), vec![1, 3]);
+        g.delete_selected();
+        assert!(g.rows[1].deleted && g.rows[3].deleted && !g.rows[2].deleted);
+        g.delete_selected();
+        assert!(!g.rows[1].deleted && !g.rows[3].deleted);
+    }
+
+    #[test]
+    fn pastes_tab_separated_rows() {
+        let mut g = grid();
+        assert_eq!(g.paste_rows("9\tnew\n10\tNULL\n"), 2);
+        assert_eq!(g.rows.len(), 7);
+        assert_eq!(g.rows[5].current, vec![None, Some("new".into())]);
+        assert_eq!(g.rows[6].current, vec![None, None]);
+        assert_eq!(g.selected_rows(), vec![5, 6]);
+        g.duplicate_selected();
+        assert_eq!(g.rows.len(), 9);
     }
 }

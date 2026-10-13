@@ -5,10 +5,10 @@
       <stop offset="1" stop-color="#f59e0b"/>
     </linearGradient>
     <filter id="shadow" x="-20%" y="-20%" width="140%" height="160%">
-      <feDropShadow dx="0" dy="28" stdDeviation="32" flood-color="#000000" flood-opacity="0.22"/>
+      <feDropShadow dx="0" dy="12" stdDeviation="12" flood-color="#000000" flood-opacity="0.22"/>
     </filter>
   </defs>
-  <rect x="100" y="100" width="824" height="824" rx="184" fill="url(#bg)" filter="url(#shadow)"/>
-  <circle cx="512" cy="512" r="224" fill="#111827"/>
-  <circle cx="588" cy="436" r="48" fill="#ffffff"/>
+  <rect x="40" y="36" width="944" height="944" rx="210" fill="url(#bg)" filter="url(#shadow)"/>
+  <circle cx="512" cy="508" r="257" fill="#111827"/>
+  <circle cx="599" cy="421" r="55" fill="#ffffff"/>
 </svg>

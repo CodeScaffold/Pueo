@@ -4394,14 +4394,18 @@ dependencies = [
 name = "pueo"
 version = "0.1.0"
 dependencies = [
+ "aes",
  "anyhow",
  "async-trait",
+ "cbc",
  "csv",
  "dirs",
+ "hmac 0.12.1",
  "libc",
  "mysql_async",
  "native-tls",
  "oo7",
+ "pbkdf2",
  "png 0.18.1",
  "postgres-native-tls",
  "redis",
@@ -4410,6 +4414,8 @@ dependencies = [
  "security-framework",
  "serde",
  "serde_json",
+ "sha1",
+ "sha2 0.10.9",
  "slint",
  "slint-build",
  "tempfile",

@@ -20,6 +20,20 @@ struct Controller {
     confirmation: RefCell<Option<ConfirmAction>>,
     library_sql: RefCell<Vec<String>>,
     connecting: RefCell<std::collections::HashSet<String>>,
+    auth_retry: RefCell<Option<((ConnectionConfig, Option<String>, Option<String>), secrets::Slot)>>,
+    /// Connections found by the import window: (connection, selected, already in the store).
+    import_batch: RefCell<Vec<(crate::import::Imported, bool, bool)>>,
+    /// A password-protected TablePlus export waiting for its password.
+    pending_export: RefCell<Option<PathBuf>>,
+    /// The filter rules shown in the filter bar (edited in place by the UI).
+    filter_rules: Rc<VecModel<FilterRule>>,
+    /// Rules and "match all" per table tab, and the tab whose rules are shown.
+    saved_rules: RefCell<std::collections::HashMap<u64, (Vec<FilterRule>, bool)>>,
+    rules_tab: std::cell::Cell<Option<u64>>,
+    /// Waits for a table to finish loading before a sidebar action (export, import…) runs.
+    waiter: RefCell<Option<slint::Timer>>,
+    /// All allowed values for the cell being edited; the dialog shows the ones matching the search.
+    cell_choices: RefCell<Vec<String>>,
 }
 fn strings(values: impl IntoIterator<Item = impl Into<SharedString>>) -> ModelRc<SharedString> {
     Rc::new(VecModel::from(
@@ -29,6 +43,10 @@ fn strings(values: impl IntoIterator<Item = impl Into<SharedString>>) -> ModelRc
 }
 fn model<T: Clone + 'static>(values: Vec<T>) -> ModelRc<T> {
     Rc::new(VecModel::from(values)).into()
+}
+/// Replacing a model resets list views (scroll position, hover), so skip identical updates.
+fn unchanged<T: Clone + PartialEq + 'static>(current: &ModelRc<T>, new: &[T]) -> bool {
+    current.row_count() == new.len() && current.iter().zip(new).all(|(a, b)| &a == b)
 }
 fn tint(c: Option<Color>) -> slint::Color {
     let (r, g, b) = c.unwrap_or(Color::Teal).rgb();
@@ -76,6 +94,51 @@ fn engine_badge(kind: DbKind) -> (&'static str, slint::Color) {
     };
     (text, slint::Color::from_rgb_u8((hex >> 16) as u8, (hex >> 8) as u8, hex as u8))
 }
+/// The PostgreSQL schema the sidebar shows, or None for all of them.
+fn sidebar_schema(w: &Workspace) -> Option<String> {
+    if w.config.kind != DbKind::Postgres || w.schema_filter == "*" {
+        return None;
+    }
+    if !w.schema_filter.is_empty() {
+        return Some(w.schema_filter.clone());
+    }
+    let configured = w.config.schema.trim();
+    if !configured.is_empty() {
+        return Some(configured.to_string());
+    }
+    w.objects.iter().any(|o| o.schema == "public").then(|| "public".to_string())
+}
+/// Which secret to ask for when a connection attempt failed because of missing or wrong credentials.
+fn auth_failure(cfg: &ConnectionConfig, error: &anyhow::Error) -> Option<secrets::Slot> {
+    let text = format!("{error:#}").to_lowercase();
+    if cfg.ssh.enabled && (text.contains("ssh tunnel failed") || text.contains("no ssh password")) {
+        let wants_secret = cfg.ssh.auth == SshAuth::Password
+            || text.contains("passphrase")
+            || text.contains("incorrect passphrase")
+            || text.contains("load key");
+        return (wants_secret && (text.contains("permission denied") || text.contains("no ssh password") || text.contains("passphrase")))
+            .then_some(secrets::Slot::Ssh);
+    }
+    if cfg.kind == DbKind::Sqlite {
+        return None;
+    }
+    [
+        "password authentication failed",
+        "password missing",
+        "no password supplied",
+        "password is required",
+        "password required",
+        "access denied for user",
+        "noauth",
+        "wrongpass",
+        "invalid password",
+        "authentication failed",
+        "requires a password",
+    ]
+    .iter()
+    .any(|needle| text.contains(needle))
+    .then_some(secrets::Slot::Database)
+}
 fn thousands(n: u64) -> String {
     let digits = n.to_string();
     let mut out = String::new();
@@ -106,6 +169,14 @@ pub fn run(files: Vec<PathBuf>) -> Result<()> {
         confirmation: RefCell::new(None),
         library_sql: RefCell::new(Vec::new()),
         connecting: RefCell::new(Default::default()),
+        auth_retry: RefCell::new(None),
+        import_batch: RefCell::new(Vec::new()),
+        pending_export: RefCell::new(None),
+        filter_rules: Rc::new(VecModel::default()),
+        saved_rules: RefCell::new(Default::default()),
+        rules_tab: std::cell::Cell::new(None),
+        waiter: RefCell::new(None),
+        cell_choices: RefCell::new(Vec::new()),
     });
     let a = app.clone();
     ui.on_command(move |action| a.command(action.as_str()));
@@ -141,6 +212,10 @@ pub fn run(files: Vec<PathBuf>) -> Result<()> {
     let a = app.clone();
     ui.on_cell_action(move |r, c, edit| a.cell_action(r, c, edit));
     let a = app.clone();
+    ui.on_cell_select(move |r, c, mode| a.cell_select(r, c, mode));
+    let a = app.clone();
+    ui.on_paste_text(move |text| a.paste_rows(text.as_str()));
+    let a = app.clone();
     ui.on_field_edit(move |index, value, null| a.field_edit(index, value.as_str(), null));
     let a = app.clone();
     ui.on_form_action(move |action| a.form_action(action.as_str()));
@@ -150,6 +225,13 @@ pub fn run(files: Vec<PathBuf>) -> Result<()> {
             a.refresh_home();
         } else if kind == "palette" {
             a.refresh_palette();
+        } else if kind == "choices" {
+            if let Some(ui) = a.ui.upgrade() {
+                let search = ui.get_cell_choice_search().to_lowercase();
+                ui.set_cell_choices(strings(
+                    a.cell_choices.borrow().iter().filter(|c| c.to_lowercase().contains(&search)).cloned(),
+                ));
+            }
         } else {
             a.refresh_objects();
         }
@@ -183,6 +265,8 @@ pub fn run(files: Vec<PathBuf>) -> Result<()> {
     ));
     ui.set_ssh_auth_names(strings(SshAuth::ALL.iter().map(|a| a.label())));
     ui.set_filter_ops(strings(filter::Op::ALL.iter().map(|op| op.label())));
+    ui.set_filter_op_values(model(filter::Op::ALL.iter().map(|op| op.needs_value()).collect()));
+    ui.set_filter_rules(app.filter_rules.clone().into());
     ui.set_version(env!("CARGO_PKG_VERSION").into());
     app.refresh_home();
     app.render();
@@ -385,12 +469,27 @@ impl Controller {
         let ws = self.workspaces.borrow();
         let w = &ws[index];
         let search = ui.get_object_search().to_lowercase();
+        let shown_schema = sidebar_schema(w);
+        if w.config.kind == DbKind::Postgres {
+            let mut schemas: Vec<String> = w.objects.iter().map(|o| o.schema.clone()).filter(|s| !s.is_empty()).collect();
+            schemas.sort();
+            schemas.dedup();
+            let index = shown_schema.as_ref().and_then(|s| schemas.iter().position(|x| x == s)).map_or(0, |p| p + 1);
+            let names: Vec<String> = std::iter::once("All schemas".to_string()).chain(schemas).collect();
+            if !unchanged(&ui.get_schemas(), &names.iter().map(SharedString::from).collect::<Vec<_>>()) {
+                ui.set_schemas(strings(names));
+            }
+            ui.set_schema_index(index as i32);
+        } else if ui.get_schemas().row_count() > 0 {
+            ui.set_schemas(strings(Vec::<String>::new()));
+        }
         let mut objects = Vec::new();
         let mut groups = std::collections::BTreeMap::<String, Vec<(usize, &db::DbObject)>>::new();
         for (i, o) in w.objects.iter().enumerate().filter(|(_, o)| {
-            format!("{} {}", o.name, o.schema)
-                .to_lowercase()
-                .contains(&search)
+            shown_schema.as_ref().is_none_or(|s| &o.schema == s)
+                && format!("{} {}", o.name, o.schema)
+                    .to_lowercase()
+                    .contains(&search)
         }) {
             let section = if o.kind.is_routine() {
                 "functions".into()
@@ -468,7 +567,9 @@ impl Controller {
                 }
             }
         }
-        ui.set_objects(model(objects));
+        if !unchanged(&ui.get_objects(), &objects) {
+            ui.set_objects(model(objects));
+        }
         ui.set_truncated(w.truncated);
     }
     fn render(&self) {
@@ -477,11 +578,10 @@ impl Controller {
         };
         let index = self.active_index();
         let ws = self.workspaces.borrow();
-        ui.set_sessions(model(
-            ws.iter()
-                .map(|w| connection_item(&w.config, String::new()))
-                .collect(),
-        ));
+        let sessions: Vec<_> = ws.iter().map(|w| connection_item(&w.config, String::new())).collect();
+        if !unchanged(&ui.get_sessions(), &sessions) {
+            ui.set_sessions(model(sessions));
+        }
         ui.set_active_session(index.map_or(-1, |i| i as i32));
         ui.set_connected(index.is_some());
         ui.set_busy(!self.connecting.borrow().is_empty() || index.is_some_and(|i| ws[i].busy()));
@@ -502,6 +602,8 @@ impl Controller {
         ui.set_selected_column(-1);
         ui.set_row_summary("".into());
         ui.set_console_seq(-1);
+        ui.set_edit_row(-1);
+        ui.set_selected_count(0);
         if let Some(index) = index {
             let w = &ws[index];
             ui.set_session_name(w.config.display_name().into());
@@ -570,6 +672,17 @@ impl Controller {
                     }
                     TabContent::Table(t) => {
                         ui.set_table(true);
+                        if self.rules_tab.get() != Some(tab.id) {
+                            self.rules_tab.set(Some(tab.id));
+                            let (rules, all) = self.saved_rules.borrow().get(&tab.id).cloned().unwrap_or_default();
+                            let rules = if rules.is_empty() {
+                                vec![FilterRule::default()]
+                            } else {
+                                rules
+                            };
+                            self.filter_rules.set_vec(rules);
+                            ui.set_filter_match_all(all || !self.saved_rules.borrow().contains_key(&tab.id));
+                        }
                         ui.set_is_key(t.object.kind == db::ObjectKind::Key);
                         ui.set_view(t.view);
                         ui.set_filter(t.filter_text.as_str().into());
@@ -626,7 +739,9 @@ impl Controller {
                 ui.set_rows(model(
                     grid.rows
                         .iter()
-                        .map(|r| RowItem {
+                        .enumerate()
+                        .map(|(index, r)| RowItem {
+                            marked: grid.marked.contains(&index),
                             state: if r.deleted {
                                 2
                             } else if r.original.is_none() {
@@ -645,6 +760,7 @@ impl Controller {
                                             .replace(['\n', '\r'], " ↵ ")
                                             .into(),
                                         null: c.is_none(),
+                                        multiline: c.as_deref().is_some_and(|v| v.contains(['\n', '\r'])),
                                         numeric: c.as_deref().is_some_and(|v| {
                                             !v.is_empty() && v.parse::<f64>().is_ok()
                                         }),
@@ -658,6 +774,7 @@ impl Controller {
                         })
                         .collect(),
                 ));
+                ui.set_selected_count(grid.selected_rows().len() as i32);
                 if let Some((row, col)) = grid.selected {
                     ui.set_selected_row(row as i32);
                     ui.set_selected_column(col as i32);
@@ -779,17 +896,20 @@ impl Controller {
         self.render();
         let a = self.clone();
         let id = cfg.id.clone();
+        let retry = (cfg.clone(), password.clone(), ssh_secret.clone());
         runtime::spawn(
             async move {
-                let password = if lookup && cfg.kind != DbKind::Sqlite {
-                    secrets::get_password(&cfg.id, secrets::Slot::Database).await?
-                } else {
-                    password
+                let password = match password {
+                    None if lookup && cfg.kind != DbKind::Sqlite => {
+                        secrets::get_password(&cfg.id, secrets::Slot::Database).await?
+                    }
+                    p => p,
                 };
-                let ssh_secret = if lookup && cfg.ssh.enabled {
-                    secrets::get_password(&cfg.id, secrets::Slot::Ssh).await?
-                } else {
-                    ssh_secret
+                let ssh_secret = match ssh_secret {
+                    None if lookup && cfg.ssh.enabled => {
+                        secrets::get_password(&cfg.id, secrets::Slot::Ssh).await?
+                    }
+                    s => s,
                 };
                 let log = db::log::QueryLog::new();
                 let driver = db::logged(
@@ -833,6 +953,7 @@ impl Controller {
                     tabs: Vec::new(),
                     active_tab: None,
                     busy: false,
+                    schema_filter: String::new(),
                     password,
                     ssh_secret,
                 })
@@ -848,11 +969,239 @@ impl Controller {
                             ui.set_notice("".into());
                         }
                     }
-                    Err(e) => a.error(e),
+                    Err(e) => match auth_failure(&retry.0, &e) {
+                        Some(slot) => a.ask_password(retry, slot, &e),
+                        None => a.error(e),
+                    },
                 }
                 a.render();
             },
         );
+    }
+    fn ask_password(&self, retry: (ConnectionConfig, Option<String>, Option<String>), slot: secrets::Slot, error: &anyhow::Error) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let cfg = &retry.0;
+        let ssh = matches!(slot, secrets::Slot::Ssh);
+        let tried = if ssh { retry.2.is_some() } else { retry.1.is_some() };
+        let who = if ssh {
+            format!("{}@{}", cfg.ssh.user, cfg.ssh.host)
+        } else if cfg.database.is_empty() {
+            format!("{}@{}", cfg.user, cfg.host)
+        } else {
+            format!("{}@{}/{}", cfg.user, cfg.host, cfg.database)
+        };
+        ui.set_auth_title(
+            if ssh {
+                if cfg.ssh.auth == SshAuth::Key { "SSH Key Passphrase" } else { "SSH Password" }
+            } else {
+                "Database Password"
+            }
+            .into(),
+        );
+        ui.set_auth_text(
+            format!(
+                "{} {} for {who}.",
+                if tried { "That password didn't work. Enter the password" } else { "Enter the password" },
+                if ssh && cfg.ssh.auth == SshAuth::Key { "for the SSH key" } else { "" },
+            )
+            .replace("  ", " ")
+            .into(),
+        );
+        ui.set_auth_detail(format!("{error:#}").lines().last().unwrap_or_default().trim().into());
+        ui.set_auth_name(cfg.display_name().into());
+        ui.set_auth_password("".into());
+        ui.set_auth_dialog(true);
+        *self.auth_retry.borrow_mut() = Some((retry, slot));
+    }
+    fn open_import(&self) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        ui.set_import_sources(model(
+            crate::import::App::ALL
+                .iter()
+                .map(|app| {
+                    let (badge, hex) = app.badge();
+                    let path = app.path();
+                    ImportSource {
+                        name: app.name().into(),
+                        badge: badge.into(),
+                        color: slint::Color::from_rgb_u8((hex >> 16) as u8, (hex >> 8) as u8, hex as u8),
+                        detail: if path.is_some() { "Found on this Mac" } else { "Not installed" }.into(),
+                        available: path.is_some(),
+                    }
+                })
+                .collect(),
+        ));
+        ui.set_import_step(0);
+        ui.set_import_dialog(true);
+    }
+    fn show_import(&self, source: &str, batch: Result<crate::import::Batch>) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let batch = match batch {
+            Ok(b) => b,
+            Err(e) => {
+                self.error(e.context(format!("Could not read connections from {source}")));
+                return;
+            }
+        };
+        let store = self.store.borrow();
+        *self.import_batch.borrow_mut() = batch
+            .connections
+            .into_iter()
+            .map(|i| {
+                let exists = crate::import::exists(&store, &i.config);
+                (i, !exists, exists)
+            })
+            .collect();
+        drop(store);
+        ui.set_import_title(format!("Import from {source}").into());
+        let mut note = Vec::new();
+        if !batch.skipped.is_empty() {
+            note.push(format!("Not supported yet: {}.", batch.skipped.join(", ")));
+        }
+        let batch_ref = self.import_batch.borrow();
+        let with_password = batch_ref.iter().filter(|i| i.0.password.is_some() || i.0.ssh_secret.is_some()).count();
+        if with_password > 0 {
+            note.push(format!("Passwords for {with_password} connection{} will be saved in your keychain.", if with_password == 1 { "" } else { "s" }));
+        } else if batch_ref.iter().any(|i| i.0.config.kind != DbKind::Sqlite) {
+            note.push("Passwords are not copied from other apps. Pueo asks for each one the first time you connect.".into());
+        }
+        drop(batch_ref);
+        ui.set_import_note(note.join(" ").into());
+        self.refresh_import();
+        ui.set_import_step(1);
+        ui.set_import_dialog(true);
+    }
+    fn refresh_import(&self) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let batch = self.import_batch.borrow();
+        ui.set_import_items(model(
+            batch
+                .iter()
+                .map(|(i, selected, exists)| {
+                    let mut item = connection_item(&i.config, i.group.clone().unwrap_or_default());
+                    if *exists {
+                        item.subtitle = format!("{} · already added", item.subtitle).into();
+                    }
+                    ImportItem { connection: item, selected: *selected, exists: *exists }
+                })
+                .collect(),
+        ));
+        ui.set_import_count(batch.iter().filter(|i| i.1).count() as i32);
+    }
+    fn run_import(self: &App) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let chosen: Vec<_> = self
+            .import_batch
+            .borrow_mut()
+            .drain(..)
+            .filter(|(_, selected, _)| *selected)
+            .map(|(i, _, _)| i)
+            .collect();
+        let passwords: Vec<(ConnectionConfig, secrets::Slot, String)> = chosen
+            .iter()
+            .flat_map(|i| {
+                [
+                    i.password.clone().map(|p| (i.config.clone(), secrets::Slot::Database, p)),
+                    i.ssh_secret.clone().map(|p| (i.config.clone(), secrets::Slot::Ssh, p)),
+                ]
+            })
+            .flatten()
+            .collect();
+        let mut store = self.store.borrow().clone();
+        let added = crate::import::merge(&mut store, chosen);
+        ui.set_import_dialog(false);
+        if added.is_empty() {
+            self.notice("No new connections to import.", false);
+            return;
+        }
+        if !self.save_store(store) {
+            return;
+        }
+        for (cfg, slot, password) in passwords.into_iter().filter(|(c, _, _)| added.contains(&c.id)) {
+            let a = self.clone();
+            runtime::spawn(
+                async move { secrets::set_password(&cfg.id, slot, &cfg.display_name(), &password).await },
+                move |r: Result<()>| {
+                    if let Err(e) = r {
+                        a.error(e.context("Could not save an imported password in the keychain"));
+                    }
+                },
+            );
+        }
+        self.notice(
+            format!("Imported {} connection{}.", added.len(), if added.len() == 1 { "" } else { "s" }),
+            false,
+        );
+    }
+    fn open_export(&self, path: PathBuf, password: String) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        match crate::import::load_tableplus_export(&path, &password) {
+            Err(e) if e.downcast_ref::<crate::import::NeedsPassword>().is_some() => {
+                ui.set_auth_title("TablePlus Export Password".into());
+                ui.set_auth_name(path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default().into());
+                ui.set_auth_text(
+                    if password.is_empty() {
+                        "Enter the password you chose when exporting these connections from TablePlus."
+                    } else {
+                        "That password didn't open the file. Enter the password used for the export."
+                    }
+                    .into(),
+                );
+                ui.set_auth_detail("".into());
+                ui.set_auth_password("".into());
+                ui.set_auth_keychain(false);
+                ui.set_auth_dialog(true);
+                *self.pending_export.borrow_mut() = Some(path);
+            }
+            result => {
+                let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                self.show_import(&name, result);
+            }
+        }
+    }
+    fn submit_password(self: &App) {
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        if let Some(path) = self.pending_export.borrow_mut().take() {
+            ui.set_auth_dialog(false);
+            ui.set_auth_keychain(true);
+            self.open_export(path, ui.get_auth_password().to_string());
+            return;
+        }
+        let Some(((cfg, password, ssh_secret), slot)) = self.auth_retry.borrow_mut().take() else {
+            return;
+        };
+        ui.set_auth_dialog(false);
+        let secret = ui.get_auth_password().to_string();
+        if ui.get_auth_remember() {
+            let (id, name, secret) = (cfg.id.clone(), cfg.display_name(), secret.clone());
+            let a = self.clone();
+            runtime::spawn(
+                async move { secrets::set_password(&id, slot, &name, &secret).await },
+                move |r: Result<()>| {
+                    if let Err(e) = r {
+                        a.error(e.context("Could not save the password in the keychain"));
+                    }
+                },
+            );
+        }
+        match slot {
+            secrets::Slot::Ssh => self.connect(cfg, password, Some(secret), true),
+            secrets::Slot::Database => self.connect(cfg, Some(secret), ssh_secret, true),
+        }
     }
     fn new_query(self: &App, sql: String, title: &str) {
         let Some(index) = self.active_index() else {
@@ -882,7 +1231,7 @@ impl Controller {
         self.render();
         if let Some(ui) = self.ui.upgrade() { ui.set_editor_focus_request(ui.get_editor_focus_request()+1); }
     }
-    fn session_action(self: &App, index: i32, _action: &str) {
+    fn session_action(self: &App, index: i32, action: &str) {
         let Some(id) = usize::try_from(index)
             .ok()
             .and_then(|i| self.workspaces.borrow().get(i).map(|w| w.config.id.clone()))
@@ -890,6 +1239,17 @@ impl Controller {
             return;
         };
         *self.active.borrow_mut() = Some(id);
+        match action {
+            "new-query" => {
+                self.new_query(String::new(), "Query");
+                return;
+            }
+            "close" => {
+                self.command("close-connection");
+                return;
+            }
+            _ => {}
+        }
         if let Some(ui) = self.ui.upgrade() {
             ui.set_home(false);
             ui.set_object_search("".into());
@@ -978,6 +1338,79 @@ impl Controller {
         }
         if self.workspaces.borrow()[i].busy() {
             self.notice("Wait for the current database operation.", true);
+            return;
+        }
+        let kind = self.workspaces.borrow()[i].config.kind;
+        match action {
+            "copy-name" => {
+                let name = if kind == DbKind::Postgres && !object.schema.is_empty() {
+                    format!("{}.{}", object.schema, object.name)
+                } else {
+                    object.name.clone()
+                };
+                if let Some(ui) = self.ui.upgrade() {
+                    ui.set_clipboard_content(name.into());
+                    ui.invoke_copy_grid();
+                }
+                return;
+            }
+            "clone" if kind != DbKind::Redis && !object.kind.is_routine() => {
+                if let Some(ui) = self.ui.upgrade() {
+                    ui.set_clone_index(index);
+                    ui.set_clone_source(object.name.as_str().into());
+                    ui.set_clone_name(format!("{}_copy", object.name).into());
+                    ui.set_clone_data(true);
+                    ui.set_clone_dialog(true);
+                }
+                return;
+            }
+            "truncate" | "drop" if kind != DbKind::Redis && !object.kind.is_routine() => {
+                if action == "truncate" && object.kind != db::ObjectKind::Table {
+                    self.notice("Only tables can be truncated.", true);
+                    return;
+                }
+                let (title, what, verb) = if action == "truncate" {
+                    ("Truncate table?", "every row in", "Truncate")
+                } else {
+                    ("Delete table?", "", "Delete")
+                };
+                let sql = if action == "truncate" {
+                    db::truncate_sql(kind, &object, false, false).0.join(";\n")
+                } else {
+                    db::drop_sql(kind, &object, false)
+                };
+                let text = if action == "truncate" {
+                    format!("This permanently removes {what} {}. It can't be undone.", object.name)
+                } else {
+                    format!("This permanently deletes {} and its data. It can't be undone.", object.name)
+                };
+                let name = object.name.clone();
+                self.confirm(title, &text, verb, move |a| {
+                    a.run_sql(sql, format!("{} {name}.", if verb == "Truncate" { "Truncated" } else { "Deleted" }));
+                });
+                return;
+            }
+            "structure" | "import" | "open-new" => {}
+            a if a.starts_with("export:") => {}
+            _ => {}
+        }
+        if let Some(format) = action.strip_prefix("export:") {
+            let format: i32 = format.parse().unwrap_or(0);
+            self.object_action(index, "open");
+            self.after_load(move |a| {
+                if let Some(ui) = a.ui.upgrade() {
+                    ui.set_export_format(format);
+                }
+                a.export();
+            });
+            return;
+        }
+        if action == "import" || action == "structure" {
+            let then = action.to_string();
+            self.object_action(index, "open");
+            self.after_load(move |a| {
+                if then == "import" { a.import() } else { a.command("view:1") }
+            });
             return;
         }
         if matches!(action, "clone" | "truncate" | "drop") {
@@ -1074,7 +1507,7 @@ impl Controller {
         let existing = self.workspaces.borrow()[i]
             .tabs
             .iter()
-            .find(|t| matches!(&t.content, TabContent::Table(table) if table.object == object))
+            .find(|t| action != "open-new" && matches!(&t.content, TabContent::Table(table) if table.object == object))
             .map(|t| t.id);
         if let Some(id) = existing {
             self.workspaces.borrow_mut()[i].active_tab = Some(id);
@@ -1105,6 +1538,59 @@ impl Controller {
         w.active_tab = Some(id);
         drop(ws);
         self.load_table();
+    }
+    /// Run `then` once the active tab has finished loading (gives up after 30 s).
+    fn after_load(self: &App, then: impl FnOnce(&App) + 'static) {
+        let timer = slint::Timer::default();
+        let weak = Rc::downgrade(self);
+        let then = RefCell::new(Some(then));
+        let started = Instant::now();
+        timer.start(slint::TimerMode::Repeated, std::time::Duration::from_millis(80), move || {
+            let Some(a) = weak.upgrade() else { return };
+            let idle = a.active_index().is_some_and(|i| {
+                let ws = a.workspaces.borrow();
+                !ws[i].busy() && ws[i].active().is_some_and(|t| !t.busy)
+            });
+            if idle || started.elapsed() > std::time::Duration::from_secs(30) {
+                if let Some(f) = then.borrow_mut().take()
+                    && idle
+                {
+                    f(&a);
+                }
+                a.waiter.borrow_mut().take();
+            }
+        });
+        *self.waiter.borrow_mut() = Some(timer);
+    }
+    /// Run statements on the active connection, then refresh the sidebar and the open tab.
+    fn run_sql(self: &App, sql: String, done: String) {
+        let Some(i) = self.active_index() else {
+            return;
+        };
+        let (session, driver) = {
+            let ws = self.workspaces.borrow();
+            (ws[i].config.id.clone(), ws[i].driver.clone())
+        };
+        self.set_busy(&session, None, true);
+        let a = self.clone();
+        runtime::spawn(async move { driver.execute(&sql).await }, move |result| {
+            a.set_busy(&session, None, false);
+            match result {
+                Ok(_) => {
+                    a.notice(done, false);
+                    a.reload_objects(None);
+                    if let Some(tab) = a.workspaces.borrow().iter().find(|w| w.config.id == session).and_then(|w| w.active_tab) {
+                        let s = session.clone();
+                        slint::Timer::single_shot(std::time::Duration::from_millis(1), {
+                            let a = a.clone();
+                            move || a.reload_tab(&s, tab)
+                        });
+                    }
+                }
+                Err(e) => a.error(e),
+            }
+            a.render();
+        });
     }
     fn load_table(self: &App) {
         let Some((session, id, driver)) = self.context() else {
@@ -1415,6 +1901,17 @@ impl Controller {
         };
         match action {
             "dismiss" => ui.set_notice("".into()),
+            "auth-submit" => self.submit_password(),
+            "auth-cancel" => {
+                ui.set_auth_dialog(false);
+                ui.set_auth_keychain(true);
+                if self.pending_export.borrow_mut().take().is_some() {
+                    return;
+                }
+                if let Some(((_, _, _), _)) = self.auth_retry.borrow_mut().take() {
+                    self.notice(ui.get_auth_detail().as_str(), true);
+                }
+            }
             "quit" => {
                 let quit = |a: &App| {
                     if let Some(ui) = a.ui.upgrade() {
@@ -1455,6 +1952,68 @@ impl Controller {
                     let mut cfg = ConnectionConfig::new(DbKind::Sqlite);
                     cfg.file_path = file.to_string_lossy().into_owned();
                     self.connect(cfg, None, None, false);
+                }
+            }
+            "import-open" => self.open_import(),
+            "import-file" => {
+                let Some(file) = rfd::FileDialog::new()
+                    .set_title("Import connections from a file")
+                    .add_filter("Connection files", &["tableplusconnection", "json", "csv", "plist", "txt", "url", "db", "sqlite", "sqlite3"])
+                    .pick_file()
+                else {
+                    return;
+                };
+                if file.extension().is_some_and(|e| e == "tableplusconnection") {
+                    self.open_export(file, String::new());
+                    return;
+                }
+                let name = file.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                self.show_import(&name, crate::import::load_file(&file));
+            }
+            "import-all" | "import-none" => {
+                for item in self.import_batch.borrow_mut().iter_mut() {
+                    item.1 = action == "import-all" && !item.2;
+                }
+                self.refresh_import();
+            }
+            "import-back" => ui.set_import_step(0),
+            "import-run" => self.run_import(),
+            a if a.starts_with("import-app:") => {
+                let Some(app) = a["import-app:".len()..].parse::<usize>().ok().and_then(|i| crate::import::App::ALL.get(i).copied()) else {
+                    return;
+                };
+                match app.path() {
+                    Some(path) => self.show_import(app.name(), app.load(&path)),
+                    None => self.notice(format!("{} was not found on this computer.", app.name()), true),
+                }
+            }
+            a if a.starts_with("import-toggle:") => {
+                if let Some(i) = a["import-toggle:".len()..].parse::<usize>().ok()
+                    && let Some(item) = self.import_batch.borrow_mut().get_mut(i)
+                    && !item.2
+                {
+                    item.1 = !item.1;
+                }
+                self.refresh_import();
+            }
+            "export-connections" => {
+                let Some(file) = rfd::FileDialog::new()
+                    .set_title("Export connections")
+                    .set_file_name("pueo-connections.json")
+                    .save_file()
+                else {
+                    return;
+                };
+                match crate::import::write_pueo(&file, &self.store.borrow()) {
+                    Ok(()) => self.notice(
+                        format!(
+                            "Exported {} connections to {}. Passwords are not included.",
+                            self.store.borrow().connections.len(),
+                            file.display()
+                        ),
+                        false,
+                    ),
+                    Err(e) => self.error(e),
                 }
             }
             "new-group" => self.show_group(&config::Group::new(""), -1),
@@ -1540,6 +2099,32 @@ impl Controller {
             },move |result| { if let Err(e) = result { a.error(e); } }); },
             _ if action.starts_with("edit:") => self.edit_text(&action[5..]),
             "close-connection" => self.close_connection(),
+            a if a.starts_with("schema:") => {
+                if let Some(i) = self.active_index() {
+                    self.workspaces.borrow_mut()[i].schema_filter = a["schema:".len()..].to_string();
+                    self.refresh_objects();
+                }
+            }
+            "clone-run" => {
+                ui.set_clone_dialog(false);
+                let Some(i) = self.active_index() else {
+                    return;
+                };
+                let name = ui.get_clone_name().trim().to_string();
+                let Some(object) = usize::try_from(ui.get_clone_index())
+                    .ok()
+                    .and_then(|j| self.workspaces.borrow()[i].objects.get(j).cloned())
+                else {
+                    return;
+                };
+                if name.is_empty() || name == object.name {
+                    self.notice("Choose a new name for the copy.", true);
+                    return;
+                }
+                let kind = self.workspaces.borrow()[i].config.kind;
+                let sql = db::clone_sql(kind, &object, &name, ui.get_clone_data()).join(";\n");
+                self.run_sql(sql, format!("Created {name}."));
+            }
             "sql-edited" => {
                 ui.set_line_numbers(line_numbers(ui.get_sql().as_str()).into());
                 if let Some(i) = self.active_index()
@@ -1586,38 +2171,52 @@ impl Controller {
                     a.load_table();
                 });
             }
-            "condition" => {
+            "filter-add" => {
+                let col = self
+                    .filter_rules
+                    .row_data(self.filter_rules.row_count().saturating_sub(1))
+                    .map_or(0, |r| r.col);
+                self.filter_rules.push(FilterRule { col, ..Default::default() });
+            }
+            "filter-apply" | "filter-clear" => {
                 let Some(i) = self.active_index() else {
                     return;
                 };
                 let kind = self.workspaces.borrow()[i].config.kind;
-                let column = ui.get_filter_column().to_string();
-                if column.is_empty() {
-                    return;
+                let clear = action == "filter-clear";
+                if clear {
+                    self.filter_rules.set_vec(vec![FilterRule::default()]);
+                    ui.set_filter("".into());
+                } else if !ui.get_filter_sql_mode() {
+                    let columns = ui.get_columns();
+                    let conditions: Vec<filter::Condition> = self
+                        .filter_rules
+                        .iter()
+                        .filter_map(|r| columns.row_data(r.col.max(0) as usize).map(|c| (c, r)))
+                        .map(|(column, r)| filter::Condition {
+                            column: column.to_string(),
+                            op: filter::Op::ALL.get(r.op.max(0) as usize).copied().unwrap_or(filter::Op::ALL[0]),
+                            value: r.value.to_string(),
+                        })
+                        .collect();
+                    let sql = filter::build_where(kind, &conditions, ui.get_filter_match_all()).unwrap_or_default();
+                    ui.set_filter(sql.into());
                 }
-                let op = filter::Op::ALL
-                    .get(ui.get_filter_op().max(0) as usize)
-                    .copied()
-                    .unwrap_or(filter::Op::ALL[0]);
-                if let Some(condition) = filter::build_where(
-                    kind,
-                    &[filter::Condition {
-                        column,
-                        op,
-                        value: ui.get_filter_value().to_string(),
-                    }],
-                    true,
-                ) {
-                    let existing = ui.get_filter().trim().to_string();
-                    ui.set_filter(
-                        if existing.is_empty() {
-                            condition
-                        } else {
-                            format!("({existing}) AND ({condition})")
-                        }
-                        .into(),
-                    );
-                    self.command("filter");
+                if let Some(tab) = self.rules_tab.get() {
+                    self.saved_rules
+                        .borrow_mut()
+                        .insert(tab, (self.filter_rules.iter().collect(), ui.get_filter_match_all()));
+                }
+                self.command("filter");
+            }
+            a if a.starts_with("filter-remove:") => {
+                if let Ok(index) = a["filter-remove:".len()..].parse::<usize>()
+                    && index < self.filter_rules.row_count()
+                {
+                    self.filter_rules.remove(index);
+                    if self.filter_rules.row_count() == 0 {
+                        self.command("filter-clear");
+                    }
                 }
             }
             "prev" | "next" => {
@@ -1652,7 +2251,7 @@ impl Controller {
                         let grid = tab.grid_mut();
                         match action {
                             "add-row" => grid.add(None),
-                            "duplicate-row" => grid.add(grid.selected.map(|(r, _)| r)),
+                            "duplicate-row" => grid.duplicate_selected(),
                             "delete-row" => grid.delete_selected(),
                             _ => {}
                         }
@@ -1698,20 +2297,44 @@ impl Controller {
                     return;
                 };
                 let g = tab.grid();
-                let row = g.selected.and_then(|(r, _)| g.rows.get(r));
-                let tsv = row.map_or_else(
-                    || {
-                        g.values()
-                            .iter()
-                            .map(|r| row_tsv(r))
-                            .collect::<Vec<_>>()
-                            .join("\n")
-                    },
-                    |r| row_tsv(&r.current),
-                );
+                let rows = g.selected_rows();
+                let tsv = if rows.is_empty() {
+                    g.values().iter().map(|r| row_tsv(r)).collect::<Vec<_>>().join("\n")
+                } else {
+                    rows.iter().filter_map(|&r| g.rows.get(r)).map(|r| row_tsv(&r.current)).collect::<Vec<_>>().join("\n")
+                };
+                let count = if rows.is_empty() { g.rows.len() } else { rows.len() };
                 ui.set_clipboard_content(tsv.into());
                 ui.invoke_copy_grid();
-                self.notice("Copied rows as TSV.", false);
+                self.notice(format!("Copied {count} row{} as tab-separated text.", if count == 1 { "" } else { "s" }), false);
+            }
+            "copy-cell" | "set-null" => {
+                let Some(i) = self.active_index() else {
+                    return;
+                };
+                let mut ws = self.workspaces.borrow_mut();
+                let Some(tab) = ws[i].active_mut() else {
+                    return;
+                };
+                if tab.busy {
+                    return;
+                }
+                let g = tab.grid_mut();
+                let Some((r, c)) = g.selected else {
+                    return;
+                };
+                if action == "set-null" {
+                    let rows = g.selected_rows();
+                    for row in rows {
+                        g.set_cell(row, c, None);
+                    }
+                    drop(ws);
+                    self.render();
+                    return;
+                }
+                let value = g.rows.get(r).and_then(|row| row.current.get(c)).cloned().flatten();
+                ui.set_clipboard_content(value.unwrap_or_default().into());
+                ui.invoke_copy_grid();
             }
             "export" => self.export(),
             "import" => self.import(),
@@ -1876,15 +2499,98 @@ impl Controller {
             ui.set_cell_title(format!("{} · Row {}", g.columns[col], row + 1).into());
             ui.set_cell_value(value.as_deref().unwrap_or("").into());
             ui.set_cell_null(value.is_none());
-            ui.set_cell_choices(strings(
-                g.choices
-                    .get(&g.columns[col])
-                    .map_or(Vec::new(), |c| c.values.clone()),
-            ));
+            let choices = g.choices.get(&g.columns[col]).map_or(Vec::new(), |c| c.values.clone());
+            ui.set_cell_choice_search("".into());
+            ui.set_cell_choices(strings(choices.clone()));
+            *self.cell_choices.borrow_mut() = choices;
             ui.set_cell_dialog(true);
         }
-        g.selected = Some((row, col));
+        g.select(row, col, 0);
+        if !edit {
+            ui.set_selected_row(row as i32);
+            ui.set_selected_column(col as i32);
+            ui.set_fields(model(
+                g.columns
+                    .iter()
+                    .zip(&g.rows[row].current)
+                    .map(|(c, v)| FieldItem {
+                        name: c.as_str().into(),
+                        value: v.as_deref().unwrap_or("").into(),
+                        null: v.is_none(),
+                    })
+                    .collect(),
+            ));
+            return;
+        }
         drop(ws);
+        self.render();
+    }
+    fn cell_select(&self, row: i32, col: i32, mode: i32) {
+        let Some(i) = self.active_index() else {
+            return;
+        };
+        let Some(ui) = self.ui.upgrade() else {
+            return;
+        };
+        let mut ws = self.workspaces.borrow_mut();
+        let Some(tab) = ws[i].active_mut() else {
+            return;
+        };
+        let g = tab.grid_mut();
+        let (Ok(row), Ok(col)) = (usize::try_from(row), usize::try_from(col)) else {
+            return;
+        };
+        if row >= g.rows.len() {
+            return;
+        }
+        let before = g.marked.clone();
+        g.select(row, col, mode);
+        let rows = ui.get_rows();
+        for changed in before.symmetric_difference(&g.marked) {
+            if let Some(mut item) = rows.row_data(*changed) {
+                item.marked = g.marked.contains(changed);
+                rows.set_row_data(*changed, item);
+            }
+        }
+        ui.set_selected_row(row as i32);
+        ui.set_selected_column(col as i32);
+        ui.set_selected_count(g.selected_rows().len() as i32);
+        ui.set_fields(model(
+            g.columns
+                .iter()
+                .zip(&g.rows[row].current)
+                .map(|(c, v)| FieldItem {
+                    name: c.as_str().into(),
+                    value: v.as_deref().unwrap_or("").into(),
+                    null: v.is_none(),
+                })
+                .collect(),
+        ));
+    }
+    fn paste_rows(&self, text: &str) {
+        let Some(i) = self.active_index() else {
+            return;
+        };
+        let mut ws = self.workspaces.borrow_mut();
+        if ws[i].busy() {
+            return;
+        }
+        let Some(tab) = ws[i].active_mut() else {
+            return;
+        };
+        let g = tab.grid_mut();
+        if !g.editable() {
+            drop(ws);
+            self.notice("This result can't be edited, so rows can't be pasted into it.", true);
+            return;
+        }
+        let added = g.paste_rows(text);
+        drop(ws);
+        if added == 0 {
+            self.notice("The clipboard has no rows to paste. Copy tab-separated rows first.", true);
+            return;
+        }
+        self.notice(format!("Pasted {added} row{} — commit to save them.", if added == 1 { "" } else { "s" }), false);
         self.render();
     }
     fn field_edit(&self, column: i32, value: &str, null: bool) {
@@ -2249,6 +2955,7 @@ impl Controller {
         let password = f.password.to_string();
         let ssh_secret = f.ssh_secret.to_string();
         ui.set_form_busy(true);
+        ui.set_form_ok(false);
         ui.set_form_notice("Working…".into());
         runtime::spawn(
             async move {
@@ -2292,6 +2999,7 @@ impl Controller {
                 match result {
                     Ok((cfg, password, ssh_secret, action, info)) => {
                         if let Some(info) = info {
+                            ui.set_form_ok(true);
                             ui.set_form_notice(format!("Connected successfully · {info}").into());
                             return;
                         }
@@ -2438,6 +3146,7 @@ impl Controller {
                         tabs: Vec::new(),
                         active_tab: None,
                         busy: false,
+                        schema_filter: String::new(),
                         password,
                         ssh_secret,
                     })
@@ -2869,6 +3578,14 @@ mod tests {
             confirmation: RefCell::new(None),
             library_sql: RefCell::new(Vec::new()),
             connecting: RefCell::new(Default::default()),
+            auth_retry: RefCell::new(None),
+        import_batch: RefCell::new(Vec::new()),
+        pending_export: RefCell::new(None),
+        filter_rules: Rc::new(VecModel::default()),
+        saved_rules: RefCell::new(Default::default()),
+        rules_tab: std::cell::Cell::new(None),
+        waiter: RefCell::new(None),
+        cell_choices: RefCell::new(Vec::new()),
         });
         let cfg = ConnectionConfig {
             file_path: ":memory:".into(),
@@ -3017,6 +3734,14 @@ mod tests {
             confirmation: RefCell::new(None),
             library_sql: RefCell::new(Vec::new()),
             connecting: RefCell::new(Default::default()),
+            auth_retry: RefCell::new(None),
+        import_batch: RefCell::new(Vec::new()),
+        pending_export: RefCell::new(None),
+        filter_rules: Rc::new(VecModel::default()),
+        saved_rules: RefCell::new(Default::default()),
+        rules_tab: std::cell::Cell::new(None),
+        waiter: RefCell::new(None),
+        cell_choices: RefCell::new(Vec::new()),
         });
         app.connect(cfg, password, None, false);
         pump(&receiver, || app.connecting.borrow().is_empty());
