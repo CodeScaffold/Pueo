@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Pueo
+Comment=Manage PostgreSQL, MySQL, SQLite and Redis databases
+Exec=pueo %F
+StartupWMClass=io.github.pueo.Pueo
+Icon=io.github.pueo.Pueo
+Terminal=false
+Type=Application
+Categories=Development;Database;GTK;
+MimeType=application/vnd.sqlite3;application/x-sqlite3;
+StartupNotify=true
