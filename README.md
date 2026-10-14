@@ -104,18 +104,41 @@ the text can be copied.
 
 ## Build & run
 
-Needs Rust ≥ 1.88, GTK ≥ 4.18 and libadwaita ≥ 1.8. On Ubuntu 25.10 / 26.04:
+Pueo runs on macOS and Linux. You need Rust 1.88 or newer ([rustup.rs](https://rustup.rs)) and the system
+`ssh` client for SSH tunnels. The interface is written in Slint (`ui/app.slint`) and compiled into the binary
+by `build.rs`, so there is nothing else to install at runtime.
+
+### macOS
+
+Install the Xcode command line tools if you don't have them (`xcode-select --install`), then:
 
 ```sh
-sudo apt install libgtk-4-dev libadwaita-1-dev libgtksourceview-5-dev libssl-dev openssh-client
+git clone https://github.com/CodeScaffold/Pueo
+cd Pueo
+sh scripts/build-macos.sh
+open target/Pueo.app
+```
+
+The script runs a release build and packages it as `target/Pueo.app` with its icon. Drag it into
+`/Applications` to install it. `sh scripts/build-macos.sh --debug` makes a faster, unoptimised build.
+Passwords are stored in the macOS Keychain.
+
+For quick iteration without packaging:
+
+```sh
 cargo run --release
 ```
 
-Without GtkSourceView the editor falls back to a plain text view with built-in highlighting:
+### Linux
+
+On Debian / Ubuntu:
 
 ```sh
-cargo run --release --no-default-features
+sudo apt install build-essential pkg-config libssl-dev libfontconfig1-dev libxkbcommon-dev openssh-client
+cargo run --release
 ```
+
+Passwords are stored through the Secret Service (GNOME Keyring, KWallet), so one must be running.
 
 To install for your user:
 
@@ -127,8 +150,11 @@ install -Dm644 data/icons/hicolor/scalable/apps/io.github.pueo.Pueo.svg \
   ~/.local/share/icons/hicolor/scalable/apps/io.github.pueo.Pueo.svg
 ```
 
-The icon is also bundled into the binary (`data/resources.gresource.xml`, compiled by `build.rs`), so the
-window and About dialog show it without installing.
+### Opening a SQLite file directly
+
+```sh
+cargo run --release -- path/to/file.db
+```
 
 ## Keyboard shortcuts
 
