@@ -158,6 +158,17 @@ fn local_time(at: std::time::SystemTime) -> String {
     format!("{:02}:{:02}:{:02}.{:03}", tm.tm_hour, tm.tm_min, tm.tm_sec, secs.subsec_millis())
 }
 
+/// Match the native title bar to the chosen appearance; `None` follows the system.
+fn window_theme(ui: &AppWindow, mode: i32) {
+    use slint::winit_030::{WinitWindowAccessor, winit::window::Theme};
+    let theme = match mode {
+        1 => Some(Theme::Light),
+        2 => Some(Theme::Dark),
+        _ => None,
+    };
+    ui.window().with_winit_window(|w| w.set_theme(theme));
+}
+
 pub fn run(files: Vec<PathBuf>) -> Result<()> {
     let ui = AppWindow::new()?;
     let app = Rc::new(Controller {
@@ -177,6 +188,15 @@ pub fn run(files: Vec<PathBuf>) -> Result<()> {
         rules_tab: std::cell::Cell::new(None),
         waiter: RefCell::new(None),
         cell_choices: RefCell::new(Vec::new()),
+    });
+    ui.invoke_set_appearance(config::appearance());
+    let weak = ui.as_weak();
+    let _ = slint::spawn_local(async move {
+        use slint::winit_030::WinitWindowAccessor;
+        let Some(ui) = weak.upgrade() else { return };
+        if ui.window().winit_window().await.is_ok() {
+            window_theme(&ui, config::appearance());
+        }
     });
     let a = app.clone();
     ui.on_command(move |action| a.command(action.as_str()));
@@ -2099,6 +2119,14 @@ impl Controller {
             },move |result| { if let Err(e) = result { a.error(e); } }); },
             _ if action.starts_with("edit:") => self.edit_text(&action[5..]),
             "close-connection" => self.close_connection(),
+            a if a.starts_with("appearance:") => {
+                let mode = a["appearance:".len()..].parse().unwrap_or(0);
+                ui.invoke_set_appearance(mode);
+                window_theme(&ui, mode);
+                if let Err(e) = config::save_appearance(mode) {
+                    self.notice(&format!("Could not save the appearance: {e}"), true);
+                }
+            }
             a if a.starts_with("schema:") => {
                 if let Some(i) = self.active_index() {
                     self.workspaces.borrow_mut()[i].schema_filter = a["schema:".len()..].to_string();

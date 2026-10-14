@@ -20,33 +20,41 @@ export struct ConnectionForm {
 }
 
 export global Theme {
-    out property <color> rail: #161616;
-    out property <color> toolbar: #282828;
-    out property <color> sidebar: #232323;
-    out property <color> content: #1c1c1c;
-    out property <color> content-alt: #202020;
-    out property <color> header: #252525;
-    out property <color> surface: #ffffff12;
-    out property <color> hover: #ffffff0d;
-    out property <color> input: #ffffff0f;
-    out property <color> input-border: #ffffff1a;
-    out property <color> menu: #2e2e2e;
-    out property <color> dialog: #2a2a2a;
-    out property <color> line: #353535;
-    out property <color> grid-line: #2b2b2b;
-    out property <color> text: #e9e9e9;
-    out property <color> muted: #a3a3a3;
-    out property <color> faint: #6f6f6f;
-    out property <color> icon: #c4c4c4;
-    out property <color> accent: #e46a2a;
-    out property <color> accent-text: #ffffff;
-    out property <color> danger: #e5484d;
-    out property <color> success: #3fb950;
-    out property <color> warning: #e5a50a;
-    out property <color> keyword: #82aaff;
-    out property <color> string: #e6c07b;
-    out property <color> number: #f78c6c;
-    out property <color> comment: #6b7d8f;
+    // 0 follows the system, 1 light, 2 dark.
+    in-out property <int> appearance: 0;
+    in-out property <bool> system-dark: true;
+    out property <bool> dark: appearance == 2 || (appearance == 0 && system-dark);
+    out property <color> ink: dark ? #ffffff : #000000;
+    out property <float> shadow: dark ? 1 : 0.45;
+    out property <color> header-hover: dark ? #2c2c2c : #e8e8e8;
+    out property <color> well: dark ? #00000026 : #00000008;
+    out property <color> rail: dark ? #161616 : #e8e8e8;
+    out property <color> toolbar: dark ? #282828 : #f2f2f2;
+    out property <color> sidebar: dark ? #232323 : #f6f6f6;
+    out property <color> content: dark ? #1c1c1c : #ffffff;
+    out property <color> content-alt: dark ? #202020 : #f8f8f8;
+    out property <color> header: dark ? #252525 : #f2f2f2;
+    out property <color> surface: dark ? #ffffff12 : #00000012;
+    out property <color> hover: dark ? #ffffff0d : #0000000b;
+    out property <color> input: dark ? #ffffff0f : #00000008;
+    out property <color> input-border: dark ? #ffffff1a : #00000021;
+    out property <color> menu: dark ? #2e2e2e : #ffffff;
+    out property <color> dialog: dark ? #2a2a2a : #fbfbfb;
+    out property <color> line: dark ? #353535 : #dddddd;
+    out property <color> grid-line: dark ? #2b2b2b : #ebebeb;
+    out property <color> text: dark ? #e9e9e9 : #1d1d1f;
+    out property <color> muted: dark ? #a3a3a3 : #666666;
+    out property <color> faint: dark ? #6f6f6f : #a3a3a3;
+    out property <color> icon: dark ? #c4c4c4 : #4d4d4d;
+    out property <color> accent: dark ? #e46a2a : #e46a2a;
+    out property <color> accent-text: dark ? #ffffff : #ffffff;
+    out property <color> danger: dark ? #e5484d : #d1242f;
+    out property <color> success: dark ? #3fb950 : #1a7f37;
+    out property <color> warning: dark ? #e5a50a : #b7791f;
+    out property <color> keyword: dark ? #82aaff : #1f5fbf;
+    out property <color> string: dark ? #e6c07b : #9a5b00;
+    out property <color> number: dark ? #f78c6c : #c4421a;
+    out property <color> comment: dark ? #6b7d8f : #7a8794;
     out property <string> mono: Platform.os == OperatingSystemType.macos ? "Menlo" : "monospace";
     out property <string> ui: Platform.os == OperatingSystemType.macos ? "system-ui" : "sans-serif";
     out property <[string]> engines: ["PostgreSQL", "MySQL / MariaDB", "SQLite", "Redis"];
@@ -87,8 +95,8 @@ component IconButton inherits Rectangle {
 component ToolGroup inherits Rectangle {
     height: 32px;
     border-radius: 9px;
-    background: #ffffff0a;
-    border-width: 1px; border-color: #ffffff0d;
+    background: Theme.ink.with-alpha(0.039);
+    border-width: 1px; border-color: Theme.ink.with-alpha(0.051);
     HorizontalLayout { padding: 2px; spacing: 2px; @children }
 }
 
@@ -106,7 +114,7 @@ component Btn inherits Rectangle {
     border-radius: 6px;
     background: root.primary ? (ta.pressed ? Theme.accent.darker(0.15) : ta.has-hover ? Theme.accent.brighter(0.08) : Theme.accent)
         : root.active ? Theme.accent.with-alpha(0.22)
-        : ta.pressed ? #ffffff24 : ta.has-hover ? #ffffff1c : #ffffff12;
+        : ta.pressed ? Theme.ink.with-alpha(0.141) : ta.has-hover ? Theme.ink.with-alpha(0.110) : Theme.ink.with-alpha(0.071);
     animate background { duration: 120ms; easing: ease; }
     opacity: root.enabled ? 1 : 0.45;
     lay := HorizontalLayout {
@@ -135,14 +143,14 @@ component Segmented inherits Rectangle {
     callback selected(int);
     height: 26px;
     border-radius: 7px;
-    background: #ffffff0d;
+    background: Theme.ink.with-alpha(0.051);
     opacity: root.enabled ? 1 : 0.5;
     HorizontalLayout {
         padding: 2px; spacing: 2px;
         for item[i] in root.items: Rectangle {
             min-width: label.preferred-width + 24px;
             border-radius: 5px;
-            background: i == root.current ? Theme.accent : seg.has-hover ? #ffffff10 : transparent;
+            background: i == root.current ? Theme.accent : seg.has-hover ? Theme.ink.with-alpha(0.063) : transparent;
             animate background { duration: 120ms; easing: ease; }
             label := Text {
                 text: item; font-size: 12.5px; width: parent.width; height: parent.height;
@@ -231,7 +239,7 @@ component Select inherits Rectangle {
     height: 28px;
     min-width: 80px;
     border-radius: 6px;
-    background: ta.has-hover && root.enabled ? #ffffff16 : Theme.input;
+    background: ta.has-hover && root.enabled ? Theme.ink.with-alpha(0.086) : Theme.input;
     border-width: 1px; border-color: Theme.input-border;
     opacity: root.enabled ? 1 : 0.5;
     HorizontalLayout {
@@ -245,8 +253,8 @@ component Select inherits Rectangle {
         width: max(root.width, 180px);
         height: min(root.model.length * 26px + 10px, 320px);
         Rectangle {
-            background: Theme.menu; border-radius: 8px; border-width: 1px; border-color: #ffffff1a;
-            drop-shadow-blur: 18px; drop-shadow-color: #00000090; drop-shadow-offset-y: 6px;
+            background: Theme.menu; border-radius: 8px; border-width: 1px; border-color: Theme.ink.with-alpha(0.102);
+            drop-shadow-blur: 18px; drop-shadow-color: #000000.with-alpha(0.56 * Theme.shadow); drop-shadow-offset-y: 6px;
             ListView {
                 x: 5px; y: 5px; width: parent.width - 10px; height: parent.height - 10px;
                 for item[i] in root.model: Rectangle {
@@ -276,7 +284,7 @@ component Check inherits Rectangle {
         Rectangle {
             width: 16px; height: 16px; y: 3px; border-radius: 4px;
             background: root.checked ? Theme.accent : Theme.input;
-            border-width: root.checked ? 0px : 1px; border-color: #ffffff30;
+            border-width: root.checked ? 0px : 1px; border-color: Theme.ink.with-alpha(0.188);
             Image { visible: root.checked; source: @image-url("icons/check.svg"); width: 12px; height: 12px; x: 2px; y: 2px; colorize: Theme.accent-text; }
         }
         Text { text: root.text; font-size: 13px; color: Theme.text; vertical-alignment: center; }
@@ -304,8 +312,8 @@ component TagPill inherits Rectangle {
     height: 18px;
     width: label.preferred-width + 12px;
     border-radius: 4px;
-    background: root.tone.with-alpha(0.22);
-    label := Text { x: 6px; height: parent.height; text: root.text; color: root.tone.brighter(0.35); font-size: 11.5px; vertical-alignment: center; }
+    background: root.tone.with-alpha(Theme.dark ? 0.22 : 0.16);
+    label := Text { x: 6px; height: parent.height; text: root.text; color: Theme.dark ? root.tone.brighter(0.35) : root.tone.darker(0.45); font-size: 11.5px; vertical-alignment: center; }
 }
 
 // Ported from the original GTK loading_fx.rs: while the connection works, a faint grid of
@@ -401,7 +409,7 @@ component WorkspaceTab inherits Rectangle {
     max-width: 230px;
     height: 28px;
     border-radius: 6px;
-    background: root.active ? #ffffff14 : hit.has-hover ? #ffffff08 : transparent;
+    background: root.active ? Theme.ink.with-alpha(0.078) : hit.has-hover ? Theme.ink.with-alpha(0.031) : transparent;
     animate background { duration: 120ms; easing: ease; }
     HorizontalLayout {
         padding-left: 10px; padding-right: 4px; spacing: 7px;
@@ -452,7 +460,7 @@ component CodeEditor inherits Rectangle {
             if input.has-focus: Rectangle {
                 x: 0px; y: 4px + root.caret.line * root.line-height;
                 width: max(scroll.visible-width, input.preferred-width + 16px); height: root.line-height;
-                background: #ffffff08;
+                background: Theme.ink.with-alpha(0.031);
             }
             input := TextInput {
                 x: 6px; y: 4px;
@@ -502,7 +510,13 @@ export component AppWindow inherits Window {
     background: Theme.content;
     default-font-family: Theme.ui;
     default-font-size: 13px;
-    init => { Palette.color-scheme = ColorScheme.dark; }
+    property <ColorScheme> scheme: Palette.color-scheme;
+    changed scheme => { if Theme.appearance == 0 && self.scheme != ColorScheme.unknown { Theme.system-dark = self.scheme == ColorScheme.dark; } }
+    init => { Theme.system-dark = Palette.color-scheme != ColorScheme.light; }
+    public function set-appearance(mode: int) {
+        Theme.appearance = mode;
+        Palette.color-scheme = mode == 1 ? ColorScheme.light : mode == 2 ? ColorScheme.dark : ColorScheme.unknown;
+    }
 
     in property <[ConnectionItem]> connections;
     in property <[ConnectionItem]> sessions;
@@ -748,6 +762,11 @@ export component AppWindow inherits Window {
             MenuItem { title: "Discard Pending Edits"; enabled: !root.home && root.pending > 0 && !root.busy && root.menu-ready; activated => { root.command("discard"); } }
         }
         Menu { title: "View";
+            Menu { title: "Appearance";
+                MenuItem { title: "System"; checkable: true; checked: Theme.appearance == 0; activated => { root.command("appearance:0"); } }
+                MenuItem { title: "Light"; checkable: true; checked: Theme.appearance == 1; activated => { root.command("appearance:1"); } }
+                MenuItem { title: "Dark"; checkable: true; checked: Theme.appearance == 2; activated => { root.command("appearance:2"); } }
+            }
             MenuItem { title: "Connections"; shortcut: @keys(Control + "0"); enabled: root.menu-ready; activated => { root.home = true; } }
             MenuItem { title: "Sidebar"; shortcut: @keys(F9); checkable: true; checked: root.sidebar-open; enabled: !root.home && root.menu-ready; activated => { root.sidebar-open = !root.sidebar-open; } }
             MenuItem { title: "Row Inspector"; shortcut: @keys(Control + Shift + I); checkable: true; checked: root.inspector-open; enabled: !root.home && root.active-tab >= 0 && root.menu-ready; activated => { root.inspector-open = !root.inspector-open; } }
@@ -845,7 +864,7 @@ export component AppWindow inherits Window {
                     height: 40px;
                     Rectangle {
                         x: (parent.width - 40px) / 2; width: 40px; height: 40px; border-radius: 10px;
-                        background: root.home ? #ffffff14 : home-hit.has-hover ? #ffffff0a : transparent;
+                        background: root.home ? Theme.ink.with-alpha(0.078) : home-hit.has-hover ? Theme.ink.with-alpha(0.039) : transparent;
                         animate background { duration: 120ms; easing: ease; }
                         Image { source: @image-url("../data/icons/hicolor/scalable/apps/io.github.pueo.Pueo.svg"); width: 30px; height: 30px; x: 5px; y: 5px; image-fit: contain; }
                     }
@@ -854,7 +873,7 @@ export component AppWindow inherits Window {
                     }
                     accessible-role: button; accessible-label: "Connections";
                 }
-                Rectangle { height: 1px; Rectangle { x: 14px; width: parent.width - 28px; background: #ffffff14; } }
+                Rectangle { height: 1px; Rectangle { x: 14px; width: parent.width - 28px; background: Theme.ink.with-alpha(0.078); } }
                 for s[i] in root.sessions: Rectangle {
                     height: 40px;
                     property <bool> current: i == root.active-session && !root.home;
@@ -904,9 +923,9 @@ export component AppWindow inherits Window {
                         { label: "Import Connections…", icon: @image-url("icons/download.svg"), cmd: "import-open" },
                     ]: Rectangle {
                         height: 44px; border-radius: 22px;
-                        background: act.pressed ? #ffffff1a : act.has-hover ? #ffffff12 : #ffffff0a;
+                        background: act.pressed ? Theme.ink.with-alpha(0.102) : act.has-hover ? Theme.ink.with-alpha(0.071) : Theme.ink.with-alpha(0.039);
                         animate background { duration: 120ms; easing: ease; }
-                        border-width: 1px; border-color: #ffffff0f;
+                        border-width: 1px; border-color: Theme.ink.with-alpha(0.059);
                         HorizontalLayout { padding-left: 18px; spacing: 12px;
                             Image { source: action.icon; width: 18px; height: 18px; y: (parent.height - 18px) / 2; colorize: i == 0 ? Theme.accent : Theme.icon; }
                             Text { text: action.label; font-size: 14px; color: Theme.text; vertical-alignment: center; }
@@ -922,7 +941,7 @@ export component AppWindow inherits Window {
                     spacing: 10px;
                     Rectangle {
                         width: 38px; height: 38px; border-radius: 19px;
-                        background: add-hit.has-hover ? #ffffff1a : #ffffff0d; border-width: 1px; border-color: #ffffff12;
+                        background: add-hit.has-hover ? Theme.ink.with-alpha(0.102) : Theme.ink.with-alpha(0.051); border-width: 1px; border-color: Theme.ink.with-alpha(0.071);
                         Image { source: @image-url("icons/plus.svg"); width: 18px; height: 18px; x: 10px; y: 10px; colorize: Theme.icon; }
                         add-hit := TouchArea { mouse-cursor: pointer; clicked => { root.command("new-connection"); } }
                         accessible-role: button; accessible-label: "New connection";
@@ -955,7 +974,7 @@ export component AppWindow inherits Window {
                         animate opacity { duration: 120ms; }
                         Rectangle {
                             y: 2px; height: parent.height - 4px; border-radius: 8px; clip: true;
-                            background: crow.hovered ? #ffffff0a : transparent;
+                            background: crow.hovered ? Theme.ink.with-alpha(0.039) : transparent;
                             animate background { duration: 120ms; easing: ease; }
                             // A very light left-to-right wash of the connection's colour.
                             if !c.header: Rectangle {
@@ -1086,7 +1105,7 @@ export component AppWindow inherits Window {
                         border-width: 1px; border-color: root.pill-color.with-alpha(0.55);
                         HorizontalLayout {
                             padding-left: 16px; padding-right: 14px; spacing: 10px;
-                            Text { text: root.pill != "" ? root.pill : root.session-name; font-family: Theme.mono; font-size: 12px; color: #ffffffe6; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
+                            Text { text: root.pill != "" ? root.pill : root.session-name; font-family: Theme.mono; font-size: 12px; color: Theme.text; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
                             if root.busy: Spinner { width: 14px; height: 14px; y: 9px; indeterminate: true; }
                         }
                         pill-hit := TouchArea { mouse-cursor: pointer; clicked => { root.open-palette(); } }
@@ -1103,7 +1122,7 @@ export component AppWindow inherits Window {
                     }
                 }
             }
-            Rule { background: #00000080; }
+            Rule { background: Theme.line; }
             HorizontalLayout {
                 spacing: 0px;
                 if root.sidebar-open: Rectangle {
@@ -1153,7 +1172,7 @@ export component AppWindow inherits Window {
                                 height: obj.header ? 26px : 24px;
                                 Rectangle {
                                     x: 6px; width: parent.width - 12px; border-radius: 5px;
-                                    background: area.has-hover && !obj.child ? #ffffff0d : transparent;
+                                    background: area.has-hover && !obj.child ? Theme.ink.with-alpha(0.051) : transparent;
                                     animate background { duration: 120ms; easing: ease; }
                                 }
                                 HorizontalLayout {
@@ -1232,7 +1251,7 @@ export component AppWindow inherits Window {
                             vertical-stretch: 1;
                             for item[i] in root.library-items: Rectangle {
                                 height: 30px;
-                                Rectangle { x: 6px; width: parent.width - 12px; border-radius: 5px; background: lib.has-hover ? #ffffff0d : transparent; animate background { duration: 120ms; easing: ease; } }
+                                Rectangle { x: 6px; width: parent.width - 12px; border-radius: 5px; background: lib.has-hover ? Theme.ink.with-alpha(0.051) : transparent; animate background { duration: 120ms; easing: ease; } }
                                 HorizontalLayout {
                                     padding-left: 14px; padding-right: 8px; spacing: 6px;
                                     Image { source: root.sidebar-tab == 1 ? @image-url("icons/file-code.svg") : @image-url("icons/history.svg"); width: 13px; height: 13px; y: (parent.height - 13px) / 2; colorize: Theme.muted; }
@@ -1261,7 +1280,7 @@ export component AppWindow inherits Window {
                     }
                 }
                 Rectangle {
-                    width: 1px; background: split.has-hover || split.pressed ? Theme.accent : #00000080;
+                    width: 1px; background: split.has-hover || split.pressed ? Theme.accent : Theme.line;
                     split := TouchArea {
                         x: -3px; width: 7px; mouse-cursor: col-resize;
                         property <length> start;
@@ -1337,7 +1356,7 @@ export component AppWindow inherits Window {
                         }
                         if root.query && root.completion-open: Rectangle {
                             height: min(root.completions.length * 26px + 10px, 170px); background: Theme.menu;
-                            border-width: 1px; border-color: #ffffff1a;
+                            border-width: 1px; border-color: Theme.ink.with-alpha(0.102);
                             ListView {
                                 x: 5px; y: 5px; width: parent.width - 10px; height: parent.height - 10px;
                                 for item[i] in root.completions: Rectangle {
@@ -1457,7 +1476,7 @@ export component AppWindow inherits Window {
                                                 Rectangle { y: parent.height - 1px; height: 1px; background: Theme.line; }
                                             }
                                             for col[i] in root.columns: Rectangle {
-                                                width: root.column-widths[i]; background: sort-hit.has-hover ? #2c2c2c : Theme.header;
+                                                width: root.column-widths[i]; background: sort-hit.has-hover ? Theme.header-hover : Theme.header;
                                                 Text { text: col; x: 9px; width: parent.width - 18px; height: parent.height; vertical-alignment: center; overflow: elide; font-size: 12.5px; font-weight: 600; color: i == root.selected-column ? Theme.accent : Theme.text; }
                                                 Rectangle { y: parent.height - 1px; height: 1px; background: Theme.line; }
                                                 Rectangle { x: parent.width - 1px; width: 1px; y: 6px; height: parent.height - 12px; background: Theme.line; }
@@ -1588,7 +1607,7 @@ export component AppWindow inherits Window {
                                                 Text { text: field.name; font-size: 12px; font-weight: 600; color: Theme.muted; overflow: elide; vertical-alignment: center; horizontal-stretch: 1; }
                                                 Rectangle {
                                                     width: 40px; height: 18px; border-radius: 4px;
-                                                    background: field.null ? Theme.accent.with-alpha(0.3) : null-hit.has-hover ? #ffffff14 : transparent;
+                                                    background: field.null ? Theme.accent.with-alpha(0.3) : null-hit.has-hover ? Theme.ink.with-alpha(0.078) : transparent;
                                                     Text { text: "NULL"; font-size: 10px; font-weight: 700; color: field.null ? Theme.accent : Theme.faint; width: parent.width; height: parent.height; horizontal-alignment: center; vertical-alignment: center; }
                                                     null-hit := TouchArea { enabled: root.editable && !root.busy; mouse-cursor: pointer; clicked => { root.field-edit(i, field.value, !field.null); } }
                                                     accessible-role: checkbox; accessible-label: "NULL"; accessible-checked: field.null;
@@ -1645,8 +1664,8 @@ export component AppWindow inherits Window {
                                     export-menu := PopupWindow {
                                         x: -140px; y: -112px; width: 168px; height: 106px;
                                         Rectangle {
-                                            background: Theme.menu; border-radius: 8px; border-width: 1px; border-color: #ffffff1a;
-                                            drop-shadow-blur: 18px; drop-shadow-color: #00000090;
+                                            background: Theme.menu; border-radius: 8px; border-width: 1px; border-color: Theme.ink.with-alpha(0.102);
+                                            drop-shadow-blur: 18px; drop-shadow-color: #000000.with-alpha(0.56 * Theme.shadow);
                                             VerticalLayout {
                                                 padding: 5px;
                                                 for f[i] in ["Export as CSV…", "Export as JSON…", "Export as SQL…"]: Rectangle {
@@ -1715,15 +1734,15 @@ export component AppWindow inherits Window {
     tip-timer := Timer { interval: 650ms; running: false; triggered => { self.running = false; root.tip-shown = root.tip-text; } }
     if root.tip-shown != "" && root.menu-ready: Rectangle {
         x: min(root.tip-x, parent.width - self.width - 8px); y: root.tip-y; width: tip-label.preferred-width + 18px; height: 26px;
-        background: Theme.menu; border-width: 1px; border-color: #ffffff1a; border-radius: 5px;
-        drop-shadow-blur: 10px; drop-shadow-color: #00000080;
+        background: Theme.menu; border-width: 1px; border-color: Theme.ink.with-alpha(0.102); border-radius: 5px;
+        drop-shadow-blur: 10px; drop-shadow-color: #000000.with-alpha(0.50 * Theme.shadow);
         tip-label := Text { x: 9px; height: parent.height; text: root.tip-shown; font-family: Theme.mono; font-size: 11.5px; color: Theme.text; vertical-alignment: center; }
     }
 
     if root.hover-name != "" && root.menu-ready: Rectangle {
         x: 62px; y: root.hover-y; width: hover-label.preferred-width + 22px; height: 30px;
-        background: Theme.menu; border-width: 1px; border-color: #ffffff1a; border-radius: 6px;
-        drop-shadow-blur: 10px; drop-shadow-color: #00000080;
+        background: Theme.menu; border-width: 1px; border-color: Theme.ink.with-alpha(0.102); border-radius: 6px;
+        drop-shadow-blur: 10px; drop-shadow-color: #000000.with-alpha(0.50 * Theme.shadow);
         hover-label := Label { x: 11px; text: root.hover-name; height: parent.height; }
     }
 
@@ -1732,7 +1751,7 @@ export component AppWindow inherits Window {
         width: min(460px, parent.width - 120px); height: max(46px, notice-text.preferred-height + 24px);
         background: Theme.menu; border-radius: 10px; border-width: 1px;
         border-color: root.notice-error ? Theme.danger.with-alpha(0.6) : Theme.success.with-alpha(0.5);
-        drop-shadow-blur: 20px; drop-shadow-color: #000000a0; drop-shadow-offset-y: 6px;
+        drop-shadow-blur: 20px; drop-shadow-color: #000000.with-alpha(0.63 * Theme.shadow); drop-shadow-offset-y: 6px;
         HorizontalLayout {
             padding: 12px; padding-right: 6px; spacing: 10px;
             Image { source: root.notice-error ? @image-url("icons/circle-alert.svg") : @image-url("icons/check.svg"); width: 18px; height: 18px; colorize: root.notice-error ? Theme.danger : Theme.success; }
@@ -1745,7 +1764,7 @@ export component AppWindow inherits Window {
         x: root.drag-x; y: root.drag-y - root.drag-offset; width: root.drag-width;
         height: root.drag-item.header ? 40px : 54px;
         border-radius: 9px; background: Theme.menu.with-alpha(0.92); border-width: 1px; border-color: Theme.accent.with-alpha(0.7);
-        drop-shadow-blur: 24px; drop-shadow-color: #000000b0; drop-shadow-offset-y: 8px;
+        drop-shadow-blur: 24px; drop-shadow-color: #000000.with-alpha(0.69 * Theme.shadow); drop-shadow-offset-y: 8px;
         HorizontalLayout {
             padding-left: 20px; padding-right: 14px; spacing: 12px;
             if root.drag-item.header: Rectangle {
@@ -1769,13 +1788,13 @@ export component AppWindow inherits Window {
 
     // Open Connection palette (⌘K)
     if root.palette-open: Rectangle {
-        background: #00000066;
+        background: #000000.with-alpha(0.4 * Theme.shadow);
         TouchArea { clicked => { root.palette-open = false; } }
         Rectangle {
             x: (parent.width - self.width) / 2; y: max(40px, parent.height * 0.12);
             width: 540px; height: pal.preferred-height;
-            background: Theme.dialog; border-radius: 14px; border-width: 1px; border-color: #ffffff1f;
-            drop-shadow-blur: 40px; drop-shadow-color: #000000b0; drop-shadow-offset-y: 12px;
+            background: Theme.dialog; border-radius: 14px; border-width: 1px; border-color: Theme.ink.with-alpha(0.122);
+            drop-shadow-blur: 40px; drop-shadow-color: #000000.with-alpha(0.69 * Theme.shadow); drop-shadow-offset-y: 12px;
             TouchArea { }
             pal := VerticalLayout {
                 padding: 14px; spacing: 10px;
@@ -1800,7 +1819,7 @@ export component AppWindow inherits Window {
                     ListView {
                         for c[i] in root.palette-items: Rectangle {
                             height: 50px; border-radius: 8px;
-                            background: i == root.palette-index ? #ffffff17 : pal-hit.has-hover ? #ffffff0a : transparent;
+                            background: i == root.palette-index ? Theme.ink.with-alpha(0.090) : pal-hit.has-hover ? Theme.ink.with-alpha(0.039) : transparent;
                             animate background { duration: 120ms; easing: ease; }
                             HorizontalLayout {
                                 padding-left: 12px; padding-right: 12px; spacing: 12px;
@@ -1835,14 +1854,14 @@ export component AppWindow inherits Window {
     }
 
     if root.connection-dialog || root.group-dialog || root.cell-dialog || root.save-dialog || root.confirm-dialog || root.about-dialog || root.shortcuts-dialog || root.auth-dialog || root.import-dialog || root.clone-dialog: Rectangle {
-        background: #00000080;
+        background: #000000.with-alpha(0.5 * Theme.shadow);
         TouchArea { }
         Rectangle {
             x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
             width: root.import-dialog ? 660px : root.connection-dialog ? (root.engine-picker ? 560px : 620px) : 500px;
             height: root.clone-dialog ? 250px : root.import-dialog ? min(parent.height - 40px, root.import-step == 0 ? 420px : 560px) : root.auth-dialog ? (root.auth-detail != "" ? 340px : 280px) : root.connection-dialog ? (root.engine-picker ? 290px : min(parent.height - 40px, root.form.ssh ? (root.form.kind == 2 ? 560px : 740px) : (root.form.kind == 2 ? 400px : 600px))) : root.shortcuts-dialog ? min(parent.height - 80px, 560px) : root.about-dialog ? 340px : root.cell-dialog ? 440px : root.group-dialog ? 330px : 230px;
-            background: Theme.dialog; border-radius: 14px; border-width: 1px; border-color: #ffffff1f;
-            drop-shadow-blur: 40px; drop-shadow-color: #000000b0; drop-shadow-offset-y: 12px;
+            background: Theme.dialog; border-radius: 14px; border-width: 1px; border-color: Theme.ink.with-alpha(0.122);
+            drop-shadow-blur: 40px; drop-shadow-color: #000000.with-alpha(0.69 * Theme.shadow); drop-shadow-offset-y: 12px;
             if root.clone-dialog: VerticalLayout {
                 padding: 22px; spacing: 12px;
                 Text { text: "Clone " + root.clone-source; font-size: 16px; font-weight: 700; color: Theme.text; overflow: elide; }
@@ -1862,9 +1881,9 @@ export component AppWindow inherits Window {
                     spacing: 8px; alignment: center;
                     for src[i] in root.import-sources: Rectangle {
                         width: 114px; height: 128px; border-radius: 10px;
-                        background: src.available && app-hit.has-hover ? #ffffff10 : #ffffff06;
+                        background: src.available && app-hit.has-hover ? Theme.ink.with-alpha(0.063) : Theme.ink.with-alpha(0.024);
                         animate background { duration: 120ms; easing: ease; }
-                        border-width: 1px; border-color: #ffffff0d;
+                        border-width: 1px; border-color: Theme.ink.with-alpha(0.051);
                         opacity: src.available ? 1 : 0.45;
                         VerticalLayout {
                             padding: 10px; padding-top: 14px; spacing: 6px; alignment: start;
@@ -1879,7 +1898,7 @@ export component AppWindow inherits Window {
                 Muted { text: "FROM A FILE"; font-size: 11px; font-weight: 600; }
                 Rectangle {
                     height: 64px; border-radius: 10px;
-                    background: file-hit.has-hover ? #ffffff10 : #ffffff06; border-width: 1px; border-color: #ffffff0d;
+                    background: file-hit.has-hover ? Theme.ink.with-alpha(0.063) : Theme.ink.with-alpha(0.024); border-width: 1px; border-color: Theme.ink.with-alpha(0.051);
                     HorizontalLayout {
                         padding: 14px; spacing: 14px;
                         Rectangle { width: 36px; height: 36px; border-radius: 8px; background: Theme.accent.with-alpha(0.18);
@@ -1912,19 +1931,19 @@ export component AppWindow inherits Window {
                 }
                 Muted { text: root.import-items.length + " found · " + root.import-count + " selected"; }
                 Rectangle {
-                    vertical-stretch: 1; border-radius: 8px; background: #00000026; border-width: 1px; border-color: #ffffff0d;
+                    vertical-stretch: 1; border-radius: 8px; background: Theme.well; border-width: 1px; border-color: Theme.ink.with-alpha(0.051);
                     if root.import-items.length == 0: Muted { width: parent.width; height: parent.height; text: "No connections found."; horizontal-alignment: center; }
                     ListView {
                         for item[i] in root.import-items: Rectangle {
                             height: 52px;
-                            background: pick.has-hover && !item.exists ? #ffffff08 : transparent;
+                            background: pick.has-hover && !item.exists ? Theme.ink.with-alpha(0.031) : transparent;
                             opacity: item.exists ? 0.5 : 1;
                             HorizontalLayout {
                                 padding-left: 12px; padding-right: 12px; spacing: 12px;
                                 Rectangle {
                                     width: 16px; height: 16px; y: 18px; border-radius: 4px;
                                     background: item.selected ? Theme.accent : Theme.input;
-                                    border-width: item.selected ? 0px : 1px; border-color: #ffffff30;
+                                    border-width: item.selected ? 0px : 1px; border-color: Theme.ink.with-alpha(0.188);
                                     Image { visible: item.selected; source: @image-url("icons/check.svg"); width: 12px; height: 12px; x: 2px; y: 2px; colorize: Theme.accent-text; }
                                 }
                                 Avatar { y: 9px; size: 34px; text: item.connection.badge; tone: item.connection.badge-color; }
@@ -1977,7 +1996,7 @@ export component AppWindow inherits Window {
                 }
                 if root.auth-keychain: Check { text: "Save in keychain"; checked <=> root.auth-remember; }
                 if root.auth-detail != "": Rectangle {
-                    height: detail.preferred-height + 14px; border-radius: 6px; background: #ffffff0a;
+                    height: detail.preferred-height + 14px; border-radius: 6px; background: Theme.ink.with-alpha(0.039);
                     detail := Text { x: 10px; y: 7px; width: parent.width - 20px; text: root.auth-detail; color: Theme.muted; font-family: Theme.mono; font-size: 11.5px; wrap: word-wrap; }
                 }
                 HorizontalLayout { alignment: end; spacing: 8px;
@@ -2011,7 +2030,7 @@ export component AppWindow inherits Window {
                         ]: HorizontalLayout {
                             height: 26px; spacing: 12px;
                             Rectangle { width: 80px;
-                                Rectangle { x: 0px; y: 3px; width: kt.preferred-width + 14px; height: 20px; border-radius: 5px; background: #ffffff14;
+                                Rectangle { x: 0px; y: 3px; width: kt.preferred-width + 14px; height: 20px; border-radius: 5px; background: Theme.ink.with-alpha(0.078);
                                     kt := Text { x: 7px; height: parent.height; text: s.k; font-size: 12px; color: Theme.text; vertical-alignment: center; }
                                 }
                             }
@@ -2028,7 +2047,7 @@ export component AppWindow inherits Window {
                     spacing: 10px; alignment: center;
                     for name[i] in Theme.engines: Rectangle {
                         width: 118px; height: 120px; border-radius: 10px;
-                        background: i == root.picked-engine ? Theme.accent.with-alpha(0.16) : eng.has-hover ? #ffffff0a : transparent;
+                        background: i == root.picked-engine ? Theme.accent.with-alpha(0.16) : eng.has-hover ? Theme.ink.with-alpha(0.039) : transparent;
                         animate background, border-width { duration: 120ms; easing: ease; }
                         border-width: i == root.picked-engine ? 2px : 0px; border-color: Theme.accent;
                         VerticalLayout {
@@ -2147,8 +2166,8 @@ export component AppWindow inherits Window {
                         emoji-popup := PopupWindow {
                             x: parent.width - 296px; y: 32px; width: 296px; height: 212px;
                             Rectangle {
-                                background: Theme.menu; border-radius: 10px; border-width: 1px; border-color: #ffffff1a;
-                                drop-shadow-blur: 18px; drop-shadow-color: #00000090;
+                                background: Theme.menu; border-radius: 10px; border-width: 1px; border-color: Theme.ink.with-alpha(0.102);
+                                drop-shadow-blur: 18px; drop-shadow-color: #000000.with-alpha(0.56 * Theme.shadow);
                                 for e[i] in ["🗄️", "💾", "📦", "🧰", "🏢", "🏠", "🧪", "🚀", "🛒", "💳", "🏦", "📈", "📊", "🗂️", "📁", "🔐", "🔑", "🛡️", "⚙️", "🔧", "🧩", "🌐", "☁️", "🖥️", "📱", "🎮", "🎵", "📚", "✉️", "📝", "🐘", "🐬", "🪶", "🔴", "🟠", "🟡", "🟢", "🔵", "🟣", "⚫", "⭐", "🔥", "💡", "🧠", "🐞", "🧯", "🌙", "🌿"]: Rectangle {
                                     x: 8px + mod(i, 8) * 35px; y: 8px + floor(i / 8) * 33px; width: 33px; height: 31px; border-radius: 6px;
                                     background: pick-hit.has-hover ? Theme.accent.with-alpha(0.3) : transparent;

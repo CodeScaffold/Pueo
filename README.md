@@ -18,7 +18,9 @@ Supports **PostgreSQL**, **MySQL / MariaDB**, **SQLite** and **Redis**.
 | --- | --- |
 | ![Table browser](docs/screenshots/table.png) | ![Query editor](docs/screenshots/query.png) |
 
-![Importing connections from other apps](docs/screenshots/import.png)
+| Light appearance | Importing connections from other apps |
+| --- | --- |
+| ![Light appearance](docs/screenshots/table-light.png) | ![Import](docs/screenshots/import.png) |
 
 ## Features
 
@@ -100,6 +102,9 @@ history is kept per connection (last 5000 queries).
 - Export a whole table (respecting the current filter and sort) or a query result as **CSV, JSON or SQL
   INSERTs**
 - Import a CSV file with a header row into a table, in one transaction; empty fields become NULL
+
+**Appearance**: light and dark themes. By default Pueo follows the system; View → Appearance forces one or
+the other, and the choice is remembered.
 
 **Loading effect**: while a connection is working, a faint grid of memory cells appears behind the sidebar
 header, lit by a slow scan wave in the connection's colour with the odd bit flipping.
@@ -197,6 +202,7 @@ Linux and macOS use the same layout (`$XDG_CONFIG_HOME` and `$XDG_DATA_HOME` are
 | Saved queries | `~/.config/pueo/saved_queries.json` |
 | Sidebar sections open per connection | `~/.config/pueo/sidebar.json` |
 | Pinned tables and views | `~/.config/pueo/pins.json` |
+| Appearance | `~/.config/pueo/settings.json` |
 | Custom group images | `~/.config/pueo/icons/` |
 | Query history | `~/.local/share/pueo/history.jsonl` (compacted automatically) |
 | Passwords | macOS Keychain (service `pueo`) or the desktop keyring, labelled "Pueo: …" / "Pueo SSH: …" |
@@ -272,5 +278,4 @@ cargo test ssh_tunnel -- --include-ignored
 - Structure editing (add/alter columns, indexes) and a "copy as SQL" preview of pending changes
 - Export/import for very large tables without holding all rows in memory
 - More TLS options (CA file, client certificates, verify-full)
-- A light theme
 - More engines: MSSQL (tiberius), ClickHouse, MongoDB

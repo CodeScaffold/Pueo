@@ -436,6 +436,34 @@ pub fn save_sidebar_sections(connection_id: &str, sections: &std::collections::H
     Ok(())
 }
 
+fn settings_path() -> PathBuf {
+    config_dir().join("settings.json")
+}
+
+/// 0 follows the system, 1 light, 2 dark.
+pub fn appearance() -> i32 {
+    std::fs::read(settings_path())
+        .ok()
+        .and_then(|d| serde_json::from_slice::<serde_json::Value>(&d).ok())
+        .and_then(|v| v.get("appearance")?.as_i64())
+        .map_or(0, |v| v as i32)
+}
+
+pub fn save_appearance(mode: i32) -> Result<()> {
+    let path = settings_path();
+    let mut settings = std::fs::read(&path)
+        .ok()
+        .and_then(|d| serde_json::from_slice::<serde_json::Value>(&d).ok())
+        .filter(|v| v.is_object())
+        .unwrap_or_else(|| serde_json::json!({}));
+    settings["appearance"] = mode.into();
+    std::fs::create_dir_all(config_dir())?;
+    let tmp = path.with_extension("json.tmp");
+    std::fs::write(&tmp, serde_json::to_vec_pretty(&settings)?)?;
+    std::fs::rename(tmp, path)?;
+    Ok(())
+}
+
 fn pins_path() -> PathBuf {
     config_dir().join("pins.json")
 }
